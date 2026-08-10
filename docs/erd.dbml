@@ -1,0 +1,199 @@
+// Pulse — Entity Relationship Diagram
+// DBML
+// https://dbml.dbdiagram.io/docs
+//
+// This is the target data model for the full application, covering every
+// phase in development-plan.md. It is NOT all migrated yet — tables are
+// added to prisma/schema.prisma incrementally, one phase at a time.
+// Track progress against development-plan.md, not against this file.
+
+Table users {
+  id uuid [pk]
+  username varchar(50) [not null, unique]
+  email varchar(255) [not null, unique]
+  password_hash varchar(255) [not null]
+  avatar_url varchar(500)
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+Table user_devices {
+  id uuid [pk]
+  user_id uuid [not null]
+  device_id varchar(255) [not null]
+  platform varchar(20) [not null, note: 'IOS or ANDROID']
+  device_name varchar(255)
+  push_token varchar(500)
+  last_seen_at timestamp
+  created_at timestamp [not null]
+
+  Indexes {
+    (user_id, device_id) [unique]
+  }
+}
+
+Table refresh_tokens {
+  id uuid [pk]
+  user_id uuid [not null]
+  token_hash varchar(255) [not null, unique]
+  expires_at timestamp [not null]
+  revoked_at timestamp
+  created_at timestamp [not null]
+}
+
+Table rooms {
+  id uuid [pk]
+  code varchar(10) [not null, unique]
+  host_id uuid [not null]
+  name varchar(100)
+  password_hash varchar(255)
+  visibility varchar(20) [not null, note: 'PUBLIC or PRIVATE']
+  max_participants integer [not null]
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+}
+
+Table room_members {
+  id uuid [pk]
+  room_id uuid [not null]
+  user_id uuid [not null]
+  role varchar(20) [not null, note: 'HOST or MEMBER']
+  joined_at timestamp [not null]
+  left_at timestamp
+
+  Indexes {
+    (room_id, user_id) [unique]
+  }
+}
+
+Table tracks {
+  id uuid [pk]
+  uploaded_by uuid [not null]
+  title varchar(255) [not null]
+  artist varchar(255)
+  duration_ms integer [not null]
+  file_key varchar(500) [not null]
+  mime_type varchar(100) [not null]
+  file_size bigint
+  created_at timestamp [not null]
+}
+
+Table room_playlists {
+  id uuid [pk]
+  room_id uuid [not null]
+  track_id uuid [not null]
+  position integer [not null]
+  added_by uuid [not null]
+  created_at timestamp [not null]
+
+  Indexes {
+    (room_id, position) [unique]
+  }
+}
+
+Table playback_states {
+  id uuid [pk]
+  room_id uuid [not null, unique]
+  track_id uuid
+  state varchar(20) [not null, note: 'PLAYING, PAUSED, STOPPED']
+  position_ms bigint [not null]
+  playback_rate decimal(4,2) [not null]
+  scheduled_at timestamp
+  updated_at timestamp [not null]
+}
+
+Table playback_events {
+  id uuid [pk]
+  room_id uuid [not null]
+  user_id uuid [not null]
+  event_type varchar(30) [not null, note: 'PLAY, PAUSE, SEEK, TRACK_CHANGED']
+  track_id uuid
+  position_ms bigint
+  server_timestamp timestamp [not null]
+  scheduled_timestamp timestamp
+  created_at timestamp [not null]
+}
+
+Table messages {
+  id uuid [pk]
+  room_id uuid [not null]
+  user_id uuid [not null]
+  content text [not null]
+  created_at timestamp [not null]
+  updated_at timestamp
+}
+
+Table websocket_sessions {
+  id uuid [pk]
+  user_id uuid [not null]
+  room_id uuid
+  connection_id varchar(255) [not null, unique]
+  connected_at timestamp [not null]
+  disconnected_at timestamp
+  last_seen_at timestamp
+}
+
+Table notifications {
+  id uuid [pk]
+  user_id uuid [not null]
+  type varchar(50) [not null]
+  title varchar(255)
+  body text
+  data json
+  read_at timestamp
+  created_at timestamp [not null]
+}
+
+Table analytics_events {
+  id uuid [pk]
+  user_id uuid
+  room_id uuid
+  event_type varchar(100) [not null]
+  metadata json
+  created_at timestamp [not null]
+}
+
+
+// ========================
+// Relationships
+// ========================
+
+// Users
+Ref: user_devices.user_id > users.id
+Ref: refresh_tokens.user_id > users.id
+
+// Rooms
+Ref: rooms.host_id > users.id
+Ref: room_members.room_id > rooms.id
+Ref: room_members.user_id > users.id
+
+// Tracks
+Ref: tracks.uploaded_by > users.id
+
+// Playlist
+Ref: room_playlists.room_id > rooms.id
+Ref: room_playlists.track_id > tracks.id
+Ref: room_playlists.added_by > users.id
+
+// Playback
+Ref: playback_states.room_id > rooms.id
+Ref: playback_states.track_id > tracks.id
+
+Ref: playback_events.room_id > rooms.id
+Ref: playback_events.user_id > users.id
+Ref: playback_events.track_id > tracks.id
+
+// Chat
+Ref: messages.room_id > rooms.id
+Ref: messages.user_id > users.id
+
+// Realtime
+Ref: websocket_sessions.user_id > users.id
+Ref: websocket_sessions.room_id > rooms.id
+
+// Notifications
+Ref: notifications.user_id > users.id
+
+// Analytics
+Ref: analytics_events.user_id > users.id
+Ref: analytics_events.room_id > rooms.id
