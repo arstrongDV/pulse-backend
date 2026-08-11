@@ -2,10 +2,13 @@ import 'dotenv/config';
 import { Pool } from 'pg';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '@prisma/client';
+import * as argon2 from 'argon2';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
+
+const SEED_PASSWORD = 'password123';
 
 const testUsers = [
   { username: 'alice', email: 'alice@example.com' },
@@ -13,14 +16,15 @@ const testUsers = [
 ];
 
 async function main() {
+  const passwordHash = await argon2.hash(SEED_PASSWORD);
+
   for (const user of testUsers) {
     await prisma.user.upsert({
       where: { email: user.email },
-      update: {},
+      update: { passwordHash },
       create: {
         ...user,
-        // Placeholder only — real Argon2id hashing arrives in Phase 3 (Authentication).
-        passwordHash: 'seed-placeholder-not-a-real-hash',
+        passwordHash,
       },
     });
   }
