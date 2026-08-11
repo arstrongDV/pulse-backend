@@ -3,13 +3,22 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserPayloadDto } from './dto/create-user.dto';
 import * as argon2 from 'argon2';
+import { contains } from 'class-validator';
 
 @Injectable()
 export class UserService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAll() {
+  findAll(search?: string) {
+    const cleanSearch = search?.replace(/^@/, '').trim();
+
     return this.prisma.user.findMany({
+      where: cleanSearch ? {
+        username: {
+          contains: cleanSearch,
+          mode: 'insensitive',
+        }
+      } : {},
       select: {
         id: true,
         username: true,

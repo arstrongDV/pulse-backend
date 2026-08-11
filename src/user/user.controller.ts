@@ -1,4 +1,4 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { Request } from 'express';
 import { UserService } from './user.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -12,8 +12,8 @@ export class UserController {
   constructor(private readonly userService: UserService) {}
 
   @Get()
-  findAll() {
-    return this.userService.findAll();
+  findAll(@Query('search') search?: string) {
+    return this.userService.findAll(search);
   }
 
   @UseGuards(JwtAuthGuard)
