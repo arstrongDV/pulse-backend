@@ -9,12 +9,17 @@ import * as argon2 from 'argon2';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateRoomPayloadDto } from './dto/create-room.dto';
 import { generateRoomCode } from '../common/utils/utils';
+import { CreateMessagePayloadDto } from './dto/create-message.dto';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 const MAX_CODE_ATTEMPTS = 5;
 
 @Injectable()
 export class RoomsService {
-  constructor(private readonly prismaService: PrismaService) {}
+  constructor(
+    private readonly prismaService: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   async createRoom(hostId: string, payload: CreateRoomPayloadDto) {
     const passwordHash = payload.password
@@ -153,11 +158,75 @@ export class RoomsService {
     }
 
     const deletedRoom = await this.prismaService.$transaction(async (tx) => {
+      // Both room_members and messages are ON DELETE RESTRICT — the room
+      // can't be deleted while either still references it.
       await tx.roomMember.deleteMany({ where: { roomId } });
+      await tx.message.deleteMany({ where: { roomId } });
       return tx.room.delete({ where: { id: roomId } });
     });
 
     return this.toSafeRoom(deletedRoom);
+  }
+
+  async createMessage(
+    userId: string,
+    roomId: string,
+    payload: CreateMessagePayloadDto,
+  ) {
+    await this.findRoomOrThrow(roomId);
+
+    const membership = await this.prismaService.roomMember.findUnique({
+      where: { roomId_userId: { roomId, userId } },
+    });
+    if (!membership || membership.leftAt) {
+      throw new ForbiddenException('Not a member of this room');
+    }
+
+    const message = await this.prismaService.message.create({
+      data: {
+        roomId,
+        userId,
+        content: payload.content,
+      },
+    });
+
+    this.eventEmitter.emit('message.create', { roomId, message });
+
+    return message;
+  }
+
+  async getRoomMessages(userId: string, roomId: string, page = 1, limit = 10) {
+    await this.findRoomOrThrow(roomId);
+
+    const membership = await this.prismaService.roomMember.findUnique({
+      where: { roomId_userId: { roomId, userId } },
+    });
+    if (!membership || membership.leftAt) {
+      throw new ForbiddenException('Not a member of this room');
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [items, total] = await this.prismaService.$transaction([
+      this.prismaService.message.findMany({
+        where: { roomId },
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prismaService.message.count({ where: { roomId } }),
+    ]);
+
+    return {
+      items,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        hasNextPage: page * limit < total,
+      },
+    };
   }
 
   private toSafeRoom(room: Room) {

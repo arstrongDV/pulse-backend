@@ -33,6 +33,7 @@ model User {
   refreshTokens   RefreshToken[]
   hostedRooms     Room[]
   roomMemberships RoomMember[]
+  messages        Message[]
 
   @@map("users")
 }
@@ -61,8 +62,9 @@ model Room {
   createdAt       DateTime       @default(now()) @map("created_at")
   updatedAt       DateTime       @updatedAt @map("updated_at")
 
-  host    User         @relation(fields: [hostId], references: [id])
-  members RoomMember[]
+  host     User         @relation(fields: [hostId], references: [id])
+  members  RoomMember[]
+  messages Message[]
 
   @@map("rooms")
 }
@@ -80,4 +82,18 @@ model RoomMember {
 
   @@unique([roomId, userId])
   @@map("room_members")
+}
+
+model Message {
+  id        String    @id @default(uuid())
+  roomId    String    @map("room_id")
+  userId    String    @map("user_id")
+  content   String
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  room Room @relation(fields: [roomId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("messages")
 }

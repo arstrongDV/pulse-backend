@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Prisma, RoomRole, RoomVisibility } from '@prisma/client';
 import * as argon2 from 'argon2';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { RoomsService } from './rooms.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -23,6 +24,9 @@ describe('RoomsService', () => {
       deleteMany: jest.fn(),
       update: jest.fn(),
     },
+    message: {
+      deleteMany: jest.fn(),
+    },
   };
   const prismaMock = {
     $transaction: jest.fn(),
@@ -36,6 +40,14 @@ describe('RoomsService', () => {
       upsert: jest.fn(),
       update: jest.fn(),
     },
+    message: {
+      create: jest.fn(),
+      findMany: jest.fn(),
+      count: jest.fn(),
+    },
+  };
+  const eventEmitterMock = {
+    emit: jest.fn(),
   };
 
   const baseRoom = {
@@ -55,6 +67,7 @@ describe('RoomsService', () => {
       providers: [
         RoomsService,
         { provide: PrismaService, useValue: prismaMock },
+        { provide: EventEmitter2, useValue: eventEmitterMock },
       ],
     }).compile();
 
@@ -62,7 +75,8 @@ describe('RoomsService', () => {
 
     jest.clearAllMocks();
     prismaMock.$transaction.mockImplementation(
-      (callback: (tx: typeof txMock) => unknown) => callback(txMock),
+      (arg: ((tx: typeof txMock) => unknown) | Promise<unknown>[]) =>
+        Array.isArray(arg) ? Promise.all(arg) : arg(txMock),
     );
     prismaMock.roomMember.count.mockResolvedValue(1);
     prismaMock.roomMember.findUnique.mockResolvedValue(null);
@@ -409,14 +423,18 @@ describe('RoomsService', () => {
   });
 
   describe('deleteRoom', () => {
-    it('deletes memberships then the room when called by the host', async () => {
+    it('deletes memberships, messages, then the room when called by the host', async () => {
       prismaMock.room.findUnique.mockResolvedValue(baseRoom); // hostId: 'user-1'
       txMock.roomMember.deleteMany.mockResolvedValue({ count: 2 });
+      txMock.message.deleteMany.mockResolvedValue({ count: 5 });
       txMock.room.delete.mockResolvedValue(baseRoom);
 
       const result = await service.deleteRoom('user-1', 'room-1');
 
       expect(txMock.roomMember.deleteMany).toHaveBeenCalledWith({
+        where: { roomId: 'room-1' },
+      });
+      expect(txMock.message.deleteMany).toHaveBeenCalledWith({
         where: { roomId: 'room-1' },
       });
       expect(txMock.room.delete).toHaveBeenCalledWith({
@@ -442,6 +460,165 @@ describe('RoomsService', () => {
         service.deleteRoom('user-1', 'no-such-room'),
       ).rejects.toThrow(NotFoundException);
       expect(prismaMock.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('createMessage', () => {
+    it('creates the message when the sender is an active member', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue({
+        id: 'member-1',
+        roomId: 'room-1',
+        userId: 'user-2',
+        role: RoomRole.MEMBER,
+        joinedAt: new Date(),
+        leftAt: null,
+      });
+      const createdMessage = {
+        id: 'message-1',
+        roomId: 'room-1',
+        userId: 'user-2',
+        content: 'hello room',
+        createdAt: new Date(),
+        updatedAt: null,
+      };
+      prismaMock.message.create.mockResolvedValue(createdMessage);
+
+      const result = await service.createMessage('user-2', 'room-1', {
+        content: 'hello room',
+      });
+
+      expect(prismaMock.message.create).toHaveBeenCalledWith({
+        data: { roomId: 'room-1', userId: 'user-2', content: 'hello room' },
+      });
+      expect(result).toEqual(createdMessage);
+      // Guards against the create() call losing its `await`: the emitted
+      // payload must be the resolved message, not a pending Promise.
+      expect(eventEmitterMock.emit).toHaveBeenCalledWith('message.create', {
+        roomId: 'room-1',
+        message: createdMessage,
+      });
+    });
+
+    it('throws NotFoundException when the room does not exist', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.createMessage('user-2', 'no-such-room', {
+          content: 'hello',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(prismaMock.message.create).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when the sender is not a member', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.createMessage('user-2', 'room-1', { content: 'hello' }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prismaMock.message.create).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when the sender already left the room', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue({
+        id: 'member-1',
+        roomId: 'room-1',
+        userId: 'user-2',
+        role: RoomRole.MEMBER,
+        joinedAt: new Date(),
+        leftAt: new Date(),
+      });
+
+      await expect(
+        service.createMessage('user-2', 'room-1', { content: 'hello' }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prismaMock.message.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getRoomMessages', () => {
+    const activeMembership = {
+      id: 'member-1',
+      roomId: 'room-1',
+      userId: 'user-2',
+      role: RoomRole.MEMBER,
+      joinedAt: new Date(),
+      leftAt: null,
+    };
+
+    it('returns a paginated page of messages for an active member', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(activeMembership);
+      const messages = [
+        { id: 'm2', roomId: 'room-1', userId: 'user-1', content: 'second' },
+        { id: 'm1', roomId: 'room-1', userId: 'user-1', content: 'first' },
+      ];
+      prismaMock.message.findMany.mockResolvedValue(messages);
+      prismaMock.message.count.mockResolvedValue(2);
+
+      const result = await service.getRoomMessages('user-2', 'room-1', 1, 10);
+
+      expect(prismaMock.message.findMany).toHaveBeenCalledWith({
+        where: { roomId: 'room-1' },
+        skip: 0,
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result).toEqual({
+        items: messages,
+        meta: {
+          total: 2,
+          page: 1,
+          limit: 10,
+          totalPages: 1,
+          hasNextPage: false,
+        },
+      });
+    });
+
+    it('computes skip correctly for later pages', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(activeMembership);
+      prismaMock.message.findMany.mockResolvedValue([]);
+      prismaMock.message.count.mockResolvedValue(25);
+
+      const result = await service.getRoomMessages('user-2', 'room-1', 3, 10);
+
+      expect(prismaMock.message.findMany).toHaveBeenCalledWith({
+        where: { roomId: 'room-1' },
+        skip: 20,
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(result.meta).toEqual({
+        total: 25,
+        page: 3,
+        limit: 10,
+        totalPages: 3,
+        hasNextPage: false,
+      });
+    });
+
+    it('throws NotFoundException when the room does not exist', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.getRoomMessages('user-2', 'no-such-room'),
+      ).rejects.toThrow(NotFoundException);
+      expect(prismaMock.message.findMany).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when the requester is not a member', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(null);
+
+      await expect(service.getRoomMessages('user-2', 'room-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(prismaMock.message.findMany).not.toHaveBeenCalled();
     });
   });
 });

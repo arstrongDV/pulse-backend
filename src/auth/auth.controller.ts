@@ -1,5 +1,6 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { AuthPayloadDto } from './dto/auth.dto';
 import { CreateUserPayloadDto } from '../user/dto/create-user.dto';
@@ -10,11 +11,13 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('login')
   login(@Body() authPayload: AuthPayloadDto) {
     return this.authService.login(authPayload);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('register')
   signUp(@Body() createUserPayload: CreateUserPayloadDto) {
     return this.authService.register(createUserPayload);
