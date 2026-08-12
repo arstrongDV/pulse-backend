@@ -153,7 +153,10 @@ export class RoomsService {
     }
 
     const deletedRoom = await this.prismaService.$transaction(async (tx) => {
+      // Both room_members and messages are ON DELETE RESTRICT — the room
+      // can't be deleted while either still references it.
       await tx.roomMember.deleteMany({ where: { roomId } });
+      await tx.message.deleteMany({ where: { roomId } });
       return tx.room.delete({ where: { id: roomId } });
     });
 

@@ -23,6 +23,9 @@ describe('RoomsService', () => {
       deleteMany: jest.fn(),
       update: jest.fn(),
     },
+    message: {
+      deleteMany: jest.fn(),
+    },
   };
   const prismaMock = {
     $transaction: jest.fn(),
@@ -409,14 +412,18 @@ describe('RoomsService', () => {
   });
 
   describe('deleteRoom', () => {
-    it('deletes memberships then the room when called by the host', async () => {
+    it('deletes memberships, messages, then the room when called by the host', async () => {
       prismaMock.room.findUnique.mockResolvedValue(baseRoom); // hostId: 'user-1'
       txMock.roomMember.deleteMany.mockResolvedValue({ count: 2 });
+      txMock.message.deleteMany.mockResolvedValue({ count: 5 });
       txMock.room.delete.mockResolvedValue(baseRoom);
 
       const result = await service.deleteRoom('user-1', 'room-1');
 
       expect(txMock.roomMember.deleteMany).toHaveBeenCalledWith({
+        where: { roomId: 'room-1' },
+      });
+      expect(txMock.message.deleteMany).toHaveBeenCalledWith({
         where: { roomId: 'room-1' },
       });
       expect(txMock.room.delete).toHaveBeenCalledWith({

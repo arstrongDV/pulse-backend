@@ -18,5 +18,6 @@ import { requireEnv } from '../common/config/env';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
+  exports: [JwtModule],
 })
 export class AuthModule {}
