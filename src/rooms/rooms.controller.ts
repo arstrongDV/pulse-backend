@@ -4,16 +4,21 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { RoomsService } from './rooms.service';
 import { CreateRoomPayloadDto } from './dto/create-room.dto';
 import { JoinRoomPayloadDto } from './dto/join-room.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../user/user.controller';
+import { CreateMessagePayloadDto } from './dto/create-message.dto';
+import { GetMessagesQueryDto } from './dto/get-messages-query.dto';
 
 @ApiTags('rooms')
 @ApiBearerAuth()
@@ -31,14 +36,14 @@ export class RoomsController {
   }
 
   @Get(':id')
-  getRoomById(@Param('id') id: string) {
+  getRoomById(@Param('id', ParseUUIDPipe) id: string) {
     return this.roomsService.getRoomById(id);
   }
 
   @Post(':id/join')
   joinRoom(
     @Req() req: AuthenticatedRequest,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() joinRoomPayload: JoinRoomPayloadDto,
   ) {
     return this.roomsService.joinRoom(
@@ -49,12 +54,46 @@ export class RoomsController {
   }
 
   @Post(':id/leave')
-  leaveRoom(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
+  leaveRoom(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.roomsService.leaveRoom(req.user.id, id);
   }
 
   @Delete(':id')
-  deleteRoom(@Req() req: AuthenticatedRequest, @Param('id') id: string) {
+  deleteRoom(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.roomsService.deleteRoom(req.user.id, id);
+  }
+
+  @Throttle({ default: { limit: 20, ttl: 10_000 } })
+  @Post(':id/messages')
+  createMessage(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() createMessagePayload: CreateMessagePayloadDto,
+  ) {
+    return this.roomsService.createMessage(
+      req.user.id,
+      id,
+      createMessagePayload,
+    );
+  }
+
+  @Get(':id/messages')
+  getMessages(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: GetMessagesQueryDto,
+  ) {
+    return this.roomsService.getRoomMessages(
+      req.user.id,
+      id,
+      query.page,
+      query.limit,
+    );
   }
 }

@@ -1,4 +1,10 @@
-import { Logger } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Logger,
+  UseFilters,
+  UsePipes,
+  ValidationPipe,
+} from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -12,6 +18,12 @@ import { JwtService } from '@nestjs/jwt';
 import { Server, Socket } from 'socket.io';
 import { requireEnv } from '../common/config/env';
 import { PrismaService } from '../prisma/prisma.service';
+import { RoomsService } from '../rooms/rooms.service';
+import { JoinRoomEventDto } from './dto/join-room-event.dto';
+import { SendMessageEventDto } from './dto/send-message-event.dto';
+import { WsHttpExceptionFilter } from './filters/ws-exception.filter';
+import { OnEvent } from '@nestjs/event-emitter';
+import { Message } from '@prisma/client';
 
 interface JwtPayload {
   sub: string;
@@ -24,6 +36,14 @@ interface SocketData {
 type AuthenticatedSocket = Omit<Socket, 'data'> & { data: SocketData };
 
 @WebSocketGateway()
+@UsePipes(
+  new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+  }),
+)
+@UseFilters(new WsHttpExceptionFilter())
 export class RealtimeGateway
   implements OnGatewayConnection, OnGatewayDisconnect
 {
@@ -35,6 +55,7 @@ export class RealtimeGateway
   constructor(
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
+    private readonly roomsService: RoomsService,
   ) {}
 
   async handleConnection(client: AuthenticatedSocket) {
@@ -71,44 +92,41 @@ export class RealtimeGateway
   @SubscribeMessage('joinRoom')
   async handleJoinRoom(
     @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { roomId: string },
+    @MessageBody() data: JoinRoomEventDto,
   ) {
     const userId = client.data.userId;
 
     if (!(await this.isActiveMember(data.roomId, userId))) {
-      client.emit('error', { message: 'Not a member of this room' });
-      return;
+      throw new ForbiddenException('Not a member of this room');
     }
 
     await client.join(data.roomId);
     client.to(data.roomId).emit('user_joined', { userId });
   }
 
-  @SubscribeMessage('sendMessage')
-  async handleSendMessage(
-    @ConnectedSocket() client: AuthenticatedSocket,
-    @MessageBody() data: { roomId: string; content: string },
-  ) {
-    const userId = client.data.userId;
-
-    if (!(await this.isActiveMember(data.roomId, userId))) {
-      client.emit('error', { message: 'Not a member of this room' });
-      return;
-    }
-
-    const message = await this.prisma.message.create({
-      data: {
-        roomId: data.roomId,
-        userId,
-        content: data.content,
-      },
-    });
-
-    this.server.to(data.roomId).emit('newMessage', {
+  @OnEvent('message.create')
+  handleMessageCreate({
+    roomId,
+    message,
+  }: {
+    roomId: string;
+    message: Message;
+  }) {
+    this.server.to(roomId).emit('newMessage', {
       id: message.id,
       userId: message.userId,
       content: message.content,
       sentAt: message.createdAt.toISOString(),
+    });
+  }
+
+  @SubscribeMessage('sendMessage')
+  async handleSendMessage(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: SendMessageEventDto,
+  ) {
+    await this.roomsService.createMessage(client.data.userId, data.roomId, {
+      content: data.content,
     });
   }
 
