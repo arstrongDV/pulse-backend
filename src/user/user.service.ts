@@ -3,7 +3,6 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserPayloadDto } from './dto/create-user.dto';
 import * as argon2 from 'argon2';
-import { contains } from 'class-validator';
 
 @Injectable()
 export class UserService {
@@ -13,12 +12,14 @@ export class UserService {
     const cleanSearch = search?.replace(/^@/, '').trim();
 
     return this.prisma.user.findMany({
-      where: cleanSearch ? {
-        username: {
-          contains: cleanSearch,
-          mode: 'insensitive',
-        }
-      } : {},
+      where: cleanSearch
+        ? {
+            username: {
+              contains: cleanSearch,
+              mode: 'insensitive',
+            },
+          }
+        : {},
       select: {
         id: true,
         username: true,
