@@ -234,6 +234,62 @@ Playback events should include timing information.
 
 Do not rely on immediate client execution.
 
+## Control authorization
+
+```text
+PLAY   → host only
+PAUSE  → host only
+SEEK   → host only
+SKIP   → host only
+```
+
+Members cannot control playback directly. Members can add tracks to the room's queue (`room_playlists`); the host does not have to approve additions.
+
+Playback control checks `hostId` only — it does not separately verify active room membership. This is safe today only because `RoomsService.leaveRoom` reassigns `hostId` to an active member whenever the host leaves, so `hostId` can never reference a departed user. This is an implicit dependency of `PlaybackService` on that host-handoff behavior in `RoomsService` — if the handoff logic ever changes (e.g. a room can become briefly hostless), playback's host check needs an explicit active-membership check added alongside it.
+
+## Late joiners
+
+A user joining mid-track does not restart or interrupt playback for the room. The joining client requests the current authoritative state (track, position, playing/paused, reference timestamp), computes elapsed position from it, and starts locally from there.
+
+This requires no special-case logic — it falls directly out of having one authoritative server-side state that's queryable at any time.
+
+## Per-user lag — client responsibility, not server-orchestrated
+
+Do not build server-side per-user playback pausing based on WebSocket latency. WS signaling latency and audio-streaming/buffering health are different, uncorrelated things — a client can have good WS ping and poor audio buffering, or the reverse. The server has no accurate way to infer one from the other.
+
+Buffering detection and recovery is entirely local to each client:
+
+```text
+Client detects its own audio buffer underrun
+       ↓
+Client pauses its own local playback, shows "slow connection"
+       ↓
+Client keeps requesting/tracking the room's authoritative position
+       ↓
+Once buffered enough to catch up, client resumes at the CURRENT
+live position — not from where it locally paused
+```
+
+The server never needs a per-user playback state for this. It continues broadcasting exactly one authoritative timeline for the whole room, same as always.
+
+## Member lag indicator (presence-style, not playback control)
+
+Showing other room members "so-and-so has a slow connection" is a good, low-risk addition — separate from the point above. It's a status broadcast, not a playback control, and reuses the same broadcast pattern already used for `user_joined` / `user_left`.
+
+```text
+Client detects its own buffering state (ok / lagging)
+       ↓
+Client emits its status to the server
+       ↓
+Server relays to the room: member_status { userId, status }
+```
+
+Requirements:
+
+- Signal must be the client's own self-reported buffering state, not server-inferred WS latency (same reasoning as above — WS ping is not an accurate proxy for audio buffering).
+- Debounce before broadcasting: status must hold for a short window (e.g. ~2s) before flipping, in either direction. Prevents the badge flickering when latency/buffering hovers near the threshold.
+- No database table needed — purely ephemeral/live state, same as how presence already works through Socket.IO room membership.
+
 ---
 
 # Phase 7 — Audio Storage
@@ -243,7 +299,6 @@ Introduce object storage.
 Possible providers:
 
 ```text
-AWS S3
 Cloudflare R2
 ```
 
