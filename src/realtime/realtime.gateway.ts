@@ -2,6 +2,7 @@ import {
   ForbiddenException,
   Logger,
   UseFilters,
+  UseGuards,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
@@ -19,11 +20,19 @@ import { Server, Socket } from 'socket.io';
 import { requireEnv } from '../common/config/env';
 import { PrismaService } from '../prisma/prisma.service';
 import { RoomsService } from '../rooms/rooms.service';
+import { PlaybackService } from '../playback/playback.service';
 import { JoinRoomEventDto } from './dto/join-room-event.dto';
 import { SendMessageEventDto } from './dto/send-message-event.dto';
+import { PlayEventDto } from './dto/play-event.dto';
+import { PauseEventDto } from './dto/pause-event.dto';
 import { WsHttpExceptionFilter } from './filters/ws-exception.filter';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Message } from '@prisma/client';
+import { Throttle } from '@nestjs/throttler';
+import { WsThrottlerGuard } from './guards/ws-throttler.guard';
+import { SeekEventDto } from './dto/seek-event.dto';
+import { SkipEventDto } from './dto/skip-event.dto';
+import { MemberStatusEventDto } from './dto/member-status-event.dto';
 
 interface JwtPayload {
   sub: string;
@@ -56,6 +65,7 @@ export class RealtimeGateway
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
     private readonly roomsService: RoomsService,
+    private readonly playbackService: PlaybackService,
   ) {}
 
   async handleConnection(client: AuthenticatedSocket) {
@@ -120,6 +130,8 @@ export class RealtimeGateway
     });
   }
 
+  @Throttle({ default: { limit: 10, ttl: 10_000 } })
+  @UseGuards(WsThrottlerGuard)
   @SubscribeMessage('sendMessage')
   async handleSendMessage(
     @ConnectedSocket() client: AuthenticatedSocket,
@@ -127,6 +139,109 @@ export class RealtimeGateway
   ) {
     await this.roomsService.createMessage(client.data.userId, data.roomId, {
       content: data.content,
+    });
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 5_000 } })
+  @UseGuards(WsThrottlerGuard)
+  @SubscribeMessage('play')
+  async handlePlay(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: PlayEventDto,
+  ) {
+    const state = await this.playbackService.play(
+      client.data.userId,
+      data.roomId,
+      data.trackId,
+      data.positionMs,
+    );
+
+    this.server.to(data.roomId).emit('playbackStateChanged', {
+      trackId: state.trackId,
+      status: state.status,
+      positionMs: state.positionMs,
+      scheduledAt: state.scheduledAt?.toISOString() ?? null,
+    });
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 5_000 } })
+  @UseGuards(WsThrottlerGuard)
+  @SubscribeMessage('pause')
+  async handlePause(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: PauseEventDto,
+  ) {
+    const state = await this.playbackService.pause(
+      client.data.userId,
+      data.roomId,
+    );
+
+    this.server.to(data.roomId).emit('playbackStateChanged', {
+      trackId: state.trackId,
+      status: state.status,
+      positionMs: state.positionMs,
+      scheduledAt: state.scheduledAt?.toISOString() ?? null,
+    });
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 5_000 } })
+  @UseGuards(WsThrottlerGuard)
+  @SubscribeMessage('seek')
+  async seek(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: SeekEventDto,
+  ) {
+    const state = await this.playbackService.seek(
+      client.data.userId,
+      data.roomId,
+      data.positionMs,
+    );
+
+    this.server.to(data.roomId).emit('playbackStateChanged', {
+      trackId: state.trackId,
+      status: state.status,
+      positionMs: state.positionMs,
+      scheduledAt: state.scheduledAt?.toISOString() ?? null,
+    });
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 5_000 } })
+  @UseGuards(WsThrottlerGuard)
+  @SubscribeMessage('skip')
+  async skip(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: SkipEventDto,
+  ) {
+    const state = await this.playbackService.skip(
+      client.data.userId,
+      data.roomId,
+      data.trackId,
+    );
+
+    this.server.to(data.roomId).emit('playbackStateChanged', {
+      trackId: state.trackId,
+      status: state.status,
+      positionMs: state.positionMs,
+      scheduledAt: state.scheduledAt?.toISOString() ?? null,
+    });
+  }
+
+  @Throttle({ default: { limit: 5, ttl: 5_000 } })
+  @UseGuards(WsThrottlerGuard)
+  @SubscribeMessage('memberStatus')
+  async handleMemberStatus(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: MemberStatusEventDto,
+  ) {
+    const userId = client.data.userId;
+
+    if (!(await this.isActiveMember(data.roomId, userId))) {
+      throw new ForbiddenException('Not a member of this room');
+    }
+
+    client.to(data.roomId).emit('memberStatusChanged', {
+      userId,
+      lagging: data.lagging,
     });
   }
 

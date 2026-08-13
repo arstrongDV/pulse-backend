@@ -21,6 +21,12 @@ enum RoomRole {
   MEMBER
 }
 
+enum PlaybackStatus {
+  STOPPED
+  PLAYING
+  PAUSED
+}
+
 model User {
   id           String   @id @default(uuid())
   username     String   @unique
@@ -62,9 +68,10 @@ model Room {
   createdAt       DateTime       @default(now()) @map("created_at")
   updatedAt       DateTime       @updatedAt @map("updated_at")
 
-  host     User         @relation(fields: [hostId], references: [id])
-  members  RoomMember[]
-  messages Message[]
+  host            User            @relation(fields: [hostId], references: [id])
+  members         RoomMember[]
+  messages        Message[]
+  playback_states PlaybackState[]
 
   @@map("rooms")
 }
@@ -96,4 +103,18 @@ model Message {
   user User @relation(fields: [userId], references: [id])
 
   @@map("messages")
+}
+
+model PlaybackState {
+  id          String         @id @default(uuid())
+  roomId      String         @unique @map("room_id")
+  trackId     String?        @map("track_id")
+  status      PlaybackStatus @default(STOPPED)
+  positionMs  Int            @default(0) @map("position_ms")
+  scheduledAt DateTime?      @map("scheduled_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  room Room @relation(fields: [roomId], references: [id])
+
+  @@map("playback_states")
 }
