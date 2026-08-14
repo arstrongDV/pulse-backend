@@ -311,9 +311,94 @@ track metadata
 track retrieval
 ```
 
+## Purpose
+
+This module provides object storage for Pulse using Cloudflare R2.
+
+R2 is used to store large audio files.
+
+NestJS must NOT proxy large audio files through the backend.
+
+The preferred architecture is:
+
+Flutter
+    |
+    | request upload URL
+    v
+NestJS
+    |
+    | generate presigned URL
+    v
+Flutter
+    |
+    | direct upload
+    v
+Cloudflare R2
+
+
+For downloading:
+
+Flutter
+    |
+    | request audio URL
+    v
+NestJS
+    |
+    | authorize user
+    | generate signed URL
+    v
+Flutter
+    |
+    | direct download/stream
+    v
+Cloudflare R2
+
 Do not stream large audio files through NestJS unless explicitly required.
 
 Use signed URLs where appropriate.
+
+Use:
+Cloudflare R2
+S3-compatible API
+AWS SDK for JavaScript
+NestJS
+TypeScript
+
+NestJS should:
+Authenticate the user.
+Validate filename/content type/size.
+Generate a unique R2 key, e.g.
+tracks/{userId}/{uuid}.mp3
+Generate a presigned PUT URL.
+Return it to Flutter.
+Flutter:
+Flutter
+   │
+   │ POST /tracks/upload/init
+   ▼
+NestJS
+   │
+   │ { uploadUrl, key }
+   ▼
+Flutter
+   │
+   │ PUT audio directly
+   ▼
+Cloudflare R2
+Then:
+POST /tracks/upload/complete
+NestJS can save the track metadata in PostgreSQL:
+Track
+├── id
+├── ownerId
+├── title
+├── storageKey
+├── duration
+├── mimeType
+├── size
+└── createdAt
+
+installed pakages: @aws-sdk/client-s3 @aws-sdk/s3-request-presigner
 
 ---
 
