@@ -40,6 +40,8 @@ model User {
   hostedRooms     Room[]
   roomMemberships RoomMember[]
   messages        Message[]
+  tracks          Track[]
+  queueEntries    RoomQueueEntry[]
 
   @@map("users")
 }
@@ -68,10 +70,11 @@ model Room {
   createdAt       DateTime       @default(now()) @map("created_at")
   updatedAt       DateTime       @updatedAt @map("updated_at")
 
-  host            User            @relation(fields: [hostId], references: [id])
+  host            User             @relation(fields: [hostId], references: [id])
   members         RoomMember[]
   messages        Message[]
   playback_states PlaybackState[]
+  queueEntries    RoomQueueEntry[]
 
   @@map("rooms")
 }
@@ -117,4 +120,34 @@ model PlaybackState {
   room Room @relation(fields: [roomId], references: [id])
 
   @@map("playback_states")
+}
+
+model Track {
+  id         String   @id @default(uuid())
+  ownerId    String   @map("owner_id")
+  title      String
+  storageKey String   @unique @map("storage_key")
+  durationMs Int      @map("duration_ms")
+  mimeType   String   @map("mime_type")
+  size       Int
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  owner        User             @relation(fields: [ownerId], references: [id])
+  queueEntries RoomQueueEntry[]
+
+  @@map("tracks")
+}
+
+model RoomQueueEntry {
+  id        String   @id @default(uuid())
+  roomId    String   @map("room_id")
+  trackId   String   @map("track_id")
+  addedById String   @map("added_by_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  room    Room  @relation(fields: [roomId], references: [id])
+  track   Track @relation(fields: [trackId], references: [id])
+  addedBy User  @relation(fields: [addedById], references: [id])
+
+  @@map("room_queue_entries")
 }
