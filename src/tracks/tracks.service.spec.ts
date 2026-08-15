@@ -16,6 +16,10 @@ describe('TracksService', () => {
       findUnique: jest.fn(),
       create: jest.fn(),
     },
+    roomQueueEntry: {
+      findFirst: jest.fn(),
+      create: jest.fn(),
+    },
   };
   const storageServiceMock = {
     createUploadUrl: jest.fn(),
@@ -161,16 +165,46 @@ describe('TracksService', () => {
       );
     });
 
-    it('throws ForbiddenException when the caller does not own the track', async () => {
+    it('throws ForbiddenException when the caller does not own the track and it is not queued in any of their rooms', async () => {
       prismaMock.track.findUnique.mockResolvedValue({
         id: 'track-1',
         ownerId: 'user-2',
         storageKey: 'tracks/user-2/abc.mp3',
       });
+      prismaMock.roomQueueEntry.findFirst.mockResolvedValue(null);
 
       await expect(service.getDownloadUrl('user-1', 'track-1')).rejects.toThrow(
         ForbiddenException,
       );
+    });
+
+    it('returns the track with a signed download url when the caller does not own it but it is queued in a room they are an active member of', async () => {
+      prismaMock.track.findUnique.mockResolvedValue({
+        id: 'track-1',
+        ownerId: 'user-2',
+        storageKey: 'tracks/user-2/abc.mp3',
+      });
+      prismaMock.roomQueueEntry.findFirst.mockResolvedValue({
+        id: 'entry-1',
+      });
+      storageServiceMock.createDownloadUrl.mockResolvedValue(
+        'https://signed-get-url',
+      );
+
+      const result = await service.getDownloadUrl('user-1', 'track-1');
+
+      expect(result).toEqual({
+        id: 'track-1',
+        ownerId: 'user-2',
+        storageKey: 'tracks/user-2/abc.mp3',
+        url: 'https://signed-get-url',
+      });
+      expect(prismaMock.roomQueueEntry.findFirst).toHaveBeenCalledWith({
+        where: {
+          trackId: 'track-1',
+          room: { members: { some: { userId: 'user-1', leftAt: null } } },
+        },
+      });
     });
   });
 });

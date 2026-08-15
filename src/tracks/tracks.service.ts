@@ -67,8 +67,17 @@ export class TracksService {
     if (!track) {
       throw new NotFoundException('Track not found');
     }
+
     if (track.ownerId !== userId) {
-      throw new ForbiddenException('You do not have access to this track');
+      const queuedInMemberRoom = await this.prisma.roomQueueEntry.findFirst({
+        where: {
+          trackId,
+          room: { members: { some: { userId, leftAt: null } } },
+        },
+      });
+      if (!queuedInMemberRoom) {
+        throw new ForbiddenException('You do not have access to this track');
+      }
     }
 
     const url = await this.storageService.createDownloadUrl(track.storageKey);

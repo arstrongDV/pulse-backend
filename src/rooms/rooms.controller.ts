@@ -19,6 +19,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../user/user.controller';
 import { CreateMessagePayloadDto } from './dto/create-message.dto';
 import { GetMessagesQueryDto } from './dto/get-messages-query.dto';
+import { AddQueueEntryDto } from './dto/add-queue-entry.dto';
 
 @ApiTags('rooms')
 @ApiBearerAuth()
@@ -95,5 +96,31 @@ export class RoomsController {
       query.page,
       query.limit,
     );
+  }
+
+  @Post('/:id/queue')
+  putInQueue(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() payload: AddQueueEntryDto,
+  ) {
+    return this.roomsService.addToQueue(req.user.id, id, payload.trackId);
+  }
+
+  @Get('/:id/queue')
+  getFromQueue(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.roomsService.getRoomQueue(req.user.id, id);
+  }
+
+  @Delete('/:id/queue/:entryId')
+  deleteEntry(
+    @Req() req: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) roomId: string,
+    @Param('entryId', ParseUUIDPipe) entryId: string,
+  ) {
+    return this.roomsService.deleteEntry(req.user.id, roomId, entryId);
   }
 }

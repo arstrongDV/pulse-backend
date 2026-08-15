@@ -8,7 +8,17 @@ import { RoomsService } from '../rooms/rooms.service';
 describe('PlaybackService', () => {
   let service: PlaybackService;
 
+  const txMock = {
+    roomQueueEntry: {
+      findFirst: jest.fn(),
+      delete: jest.fn(),
+    },
+    playbackState: {
+      upsert: jest.fn(),
+    },
+  };
   const prismaMock = {
+    $transaction: jest.fn(),
     playbackState: {
       findUnique: jest.fn(),
       upsert: jest.fn(),
@@ -41,6 +51,9 @@ describe('PlaybackService', () => {
 
     service = module.get<PlaybackService>(PlaybackService);
     jest.clearAllMocks();
+    prismaMock.$transaction.mockImplementation(
+      (fn: (tx: typeof txMock) => unknown) => fn(txMock),
+    );
   });
 
   it('should be defined', () => {
@@ -321,20 +334,14 @@ describe('PlaybackService', () => {
   });
 
   describe('skip', () => {
-    it('switches to the new track at position 0 and schedules playback', async () => {
+    it('switches to the given track at position 0 and schedules playback', async () => {
       roomsServiceMock.getRoomById.mockResolvedValue(baseRoom); // hostId: user-1
-      prismaMock.playbackState.findUnique.mockResolvedValue({
-        roomId: 'room-1',
-        trackId: 'track-1',
-        status: PlaybackStatus.PLAYING,
-        positionMs: 42_000,
-        scheduledAt: new Date(),
-      });
-      prismaMock.playbackState.upsert.mockResolvedValue({});
+      txMock.playbackState.upsert.mockResolvedValue({});
 
       await service.skip('user-1', 'room-1', 'track-2');
 
-      expect(prismaMock.playbackState.upsert).toHaveBeenCalledWith({
+      expect(txMock.roomQueueEntry.findFirst).not.toHaveBeenCalled();
+      expect(txMock.playbackState.upsert).toHaveBeenCalledWith({
         where: { roomId: 'room-1' },
         create: {
           roomId: 'room-1',
@@ -354,12 +361,11 @@ describe('PlaybackService', () => {
 
     it('works as the first playback action in a room with no prior state', async () => {
       roomsServiceMock.getRoomById.mockResolvedValue(baseRoom);
-      prismaMock.playbackState.findUnique.mockResolvedValue(null);
-      prismaMock.playbackState.upsert.mockResolvedValue({});
+      txMock.playbackState.upsert.mockResolvedValue({});
 
       await service.skip('user-1', 'room-1', 'track-1');
 
-      expect(prismaMock.playbackState.upsert).toHaveBeenCalledWith(
+      expect(txMock.playbackState.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
           create: expect.objectContaining({
             trackId: 'track-1',
@@ -370,13 +376,51 @@ describe('PlaybackService', () => {
       );
     });
 
+    it('pulls the oldest queue entry and removes it when no trackId is given', async () => {
+      roomsServiceMock.getRoomById.mockResolvedValue(baseRoom);
+      txMock.roomQueueEntry.findFirst.mockResolvedValue({
+        id: 'entry-1',
+        roomId: 'room-1',
+        trackId: 'queued-track',
+      });
+      txMock.playbackState.upsert.mockResolvedValue({});
+
+      await service.skip('user-1', 'room-1');
+
+      expect(txMock.roomQueueEntry.findFirst).toHaveBeenCalledWith({
+        where: { roomId: 'room-1' },
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(txMock.roomQueueEntry.delete).toHaveBeenCalledWith({
+        where: { id: 'entry-1' },
+      });
+      expect(txMock.playbackState.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({
+            trackId: 'queued-track',
+          }) as unknown,
+        }),
+      );
+    });
+
+    it('throws BadRequestException when no trackId is given and the queue is empty', async () => {
+      roomsServiceMock.getRoomById.mockResolvedValue(baseRoom);
+      txMock.roomQueueEntry.findFirst.mockResolvedValue(null);
+
+      await expect(service.skip('user-1', 'room-1')).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(txMock.roomQueueEntry.delete).not.toHaveBeenCalled();
+      expect(txMock.playbackState.upsert).not.toHaveBeenCalled();
+    });
+
     it('throws ForbiddenException when the caller is not the host', async () => {
       roomsServiceMock.getRoomById.mockResolvedValue(baseRoom); // hostId: user-1
 
       await expect(service.skip('user-2', 'room-1', 'track-2')).rejects.toThrow(
         ForbiddenException,
       );
-      expect(prismaMock.playbackState.upsert).not.toHaveBeenCalled();
+      expect(prismaMock.$transaction).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { S3Client } from '@aws-sdk/client-s3';
 import { StorageService } from './storage.service';
-import { StorageController } from './storage.controller';
 import { S3_CLIENT } from './storage.constants';
 import { requireEnv } from '../common/config/env';
 
@@ -21,7 +20,6 @@ import { requireEnv } from '../common/config/env';
         }),
     },
   ],
-  controllers: [StorageController],
   exports: [StorageService],
 })
 export class StorageModule {}

@@ -109,10 +109,10 @@ export class RoomsService {
   async leaveRoom(userId: string, roomId: string) {
     const room = await this.findRoomOrThrow(roomId);
 
-    const existingMembership = await this.prismaService.roomMember.findUnique({
+    const membership = await this.prismaService.roomMember.findUnique({
       where: { roomId_userId: { roomId, userId } },
     });
-    if (!existingMembership || existingMembership.leftAt) {
+    if (!membership || membership.leftAt) {
       throw new NotFoundException('Not a member of this room');
     }
 
@@ -174,13 +174,7 @@ export class RoomsService {
     payload: CreateMessagePayloadDto,
   ) {
     await this.findRoomOrThrow(roomId);
-
-    const membership = await this.prismaService.roomMember.findUnique({
-      where: { roomId_userId: { roomId, userId } },
-    });
-    if (!membership || membership.leftAt) {
-      throw new ForbiddenException('Not a member of this room');
-    }
+    await this.checkMembership(userId, roomId);
 
     const message = await this.prismaService.message.create({
       data: {
@@ -197,13 +191,7 @@ export class RoomsService {
 
   async getRoomMessages(userId: string, roomId: string, page = 1, limit = 10) {
     await this.findRoomOrThrow(roomId);
-
-    const membership = await this.prismaService.roomMember.findUnique({
-      where: { roomId_userId: { roomId, userId } },
-    });
-    if (!membership || membership.leftAt) {
-      throw new ForbiddenException('Not a member of this room');
-    }
+    await this.checkMembership(userId, roomId);
 
     const skip = (page - 1) * limit;
 
@@ -227,6 +215,73 @@ export class RoomsService {
         hasNextPage: page * limit < total,
       },
     };
+  }
+
+  async addToQueue(userId: string, roomId: string, trackId: string) {
+    await this.findRoomOrThrow(roomId);
+    await this.checkMembership(userId, roomId);
+
+    const track = await this.prismaService.track.findUnique({
+      where: { id: trackId },
+    });
+
+    if (!track) {
+      throw new NotFoundException('Track not found');
+    }
+
+    if (track.ownerId !== userId) {
+      throw new ForbiddenException('You can only queue tracks you own');
+    }
+
+    return this.prismaService.roomQueueEntry.create({
+      data: { roomId, trackId, addedById: userId },
+    });
+  }
+
+  async getRoomQueue(userId: string, roomId: string) {
+    await this.findRoomOrThrow(roomId);
+    await this.checkMembership(userId, roomId);
+
+    return this.prismaService.roomQueueEntry.findMany({
+      where: { roomId },
+      orderBy: { createdAt: 'asc' },
+      include: { track: true },
+    });
+  }
+
+  async deleteEntry(userId: string, roomId: string, entryId: string) {
+    const room = await this.findRoomOrThrow(roomId);
+    await this.checkMembership(userId, roomId);
+
+    const entry = await this.prismaService.roomQueueEntry.findUnique({
+      where: { id: entryId },
+    });
+
+    if (!entry || entry.roomId !== roomId) {
+      throw new NotFoundException('Queue entry not found');
+    }
+
+    if (entry.addedById !== userId && room.hostId !== userId) {
+      throw new ForbiddenException(
+        'You can only remove your own queue entries',
+      );
+    }
+
+    return this.prismaService.roomQueueEntry.delete({
+      where: { id: entryId },
+    });
+  }
+
+  private async checkMembership(userId: string, roomId: string) {
+    const membershp = await this.prismaService.roomMember.findUnique({
+      where: { roomId_userId: { roomId, userId } },
+    });
+
+    if (!membershp || membershp.leftAt) {
+      throw new ForbiddenException('Not a member of this room');
+    }
+
+    return membershp;
   }
 
   private toSafeRoom(room: Room) {
