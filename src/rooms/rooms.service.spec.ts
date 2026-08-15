@@ -45,6 +45,15 @@ describe('RoomsService', () => {
       findMany: jest.fn(),
       count: jest.fn(),
     },
+    track: {
+      findUnique: jest.fn(),
+    },
+    roomQueueEntry: {
+      create: jest.fn(),
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      delete: jest.fn(),
+    },
   };
   const eventEmitterMock = {
     emit: jest.fn(),
@@ -619,6 +628,237 @@ describe('RoomsService', () => {
         ForbiddenException,
       );
       expect(prismaMock.message.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('addToQueue', () => {
+    const activeMembership = {
+      id: 'member-1',
+      roomId: 'room-1',
+      userId: 'user-2',
+      role: RoomRole.MEMBER,
+      joinedAt: new Date(),
+      leftAt: null,
+    };
+
+    it('creates the queue entry when the caller is an active member and owns the track', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(activeMembership);
+      prismaMock.track.findUnique.mockResolvedValue({
+        id: 'track-1',
+        ownerId: 'user-2',
+      });
+      const entry = {
+        id: 'entry-1',
+        roomId: 'room-1',
+        trackId: 'track-1',
+        addedById: 'user-2',
+      };
+      prismaMock.roomQueueEntry.create.mockResolvedValue(entry);
+
+      const result = await service.addToQueue('user-2', 'room-1', 'track-1');
+
+      expect(prismaMock.roomQueueEntry.create).toHaveBeenCalledWith({
+        data: { roomId: 'room-1', trackId: 'track-1', addedById: 'user-2' },
+      });
+      expect(result).toEqual(entry);
+    });
+
+    it('throws NotFoundException when the room does not exist', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.addToQueue('user-2', 'no-such-room', 'track-1'),
+      ).rejects.toThrow(NotFoundException);
+      expect(prismaMock.roomQueueEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when the caller is not an active member', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.addToQueue('user-2', 'room-1', 'track-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prismaMock.roomQueueEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the track does not exist', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(activeMembership);
+      prismaMock.track.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.addToQueue('user-2', 'room-1', 'track-1'),
+      ).rejects.toThrow(NotFoundException);
+      expect(prismaMock.roomQueueEntry.create).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when the caller does not own the track', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(activeMembership);
+      prismaMock.track.findUnique.mockResolvedValue({
+        id: 'track-1',
+        ownerId: 'someone-else',
+      });
+
+      await expect(
+        service.addToQueue('user-2', 'room-1', 'track-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prismaMock.roomQueueEntry.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getRoomQueue', () => {
+    const activeMembership = {
+      id: 'member-1',
+      roomId: 'room-1',
+      userId: 'user-2',
+      role: RoomRole.MEMBER,
+      joinedAt: new Date(),
+      leftAt: null,
+    };
+
+    it('returns the queue ordered by creation time, joined with track info', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(activeMembership);
+      const queue = [{ id: 'entry-1', roomId: 'room-1', trackId: 'track-1' }];
+      prismaMock.roomQueueEntry.findMany.mockResolvedValue(queue);
+
+      const result = await service.getRoomQueue('user-2', 'room-1');
+
+      expect(prismaMock.roomQueueEntry.findMany).toHaveBeenCalledWith({
+        where: { roomId: 'room-1' },
+        orderBy: { createdAt: 'asc' },
+        include: { track: true },
+      });
+      expect(result).toEqual(queue);
+    });
+
+    it('returns an empty array when nothing is queued, not a 404', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(activeMembership);
+      prismaMock.roomQueueEntry.findMany.mockResolvedValue([]);
+
+      const result = await service.getRoomQueue('user-2', 'room-1');
+
+      expect(result).toEqual([]);
+    });
+
+    it('throws NotFoundException when the room does not exist', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.getRoomQueue('user-2', 'no-such-room'),
+      ).rejects.toThrow(NotFoundException);
+      expect(prismaMock.roomQueueEntry.findMany).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when the caller is not an active member', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(null);
+
+      await expect(service.getRoomQueue('user-2', 'room-1')).rejects.toThrow(
+        ForbiddenException,
+      );
+      expect(prismaMock.roomQueueEntry.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteEntry', () => {
+    const activeMembership = {
+      id: 'member-1',
+      roomId: 'room-1',
+      userId: 'user-2',
+      role: RoomRole.MEMBER,
+      joinedAt: new Date(),
+      leftAt: null,
+    };
+    const queueEntry = {
+      id: 'entry-1',
+      roomId: 'room-1',
+      trackId: 'track-1',
+      addedById: 'user-2',
+    };
+
+    it('deletes the entry when the caller is the one who added it', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom); // hostId: user-1
+      prismaMock.roomMember.findUnique.mockResolvedValue(activeMembership);
+      prismaMock.roomQueueEntry.findUnique.mockResolvedValue(queueEntry);
+      prismaMock.roomQueueEntry.delete.mockResolvedValue(queueEntry);
+
+      const result = await service.deleteEntry('user-2', 'room-1', 'entry-1');
+
+      expect(prismaMock.roomQueueEntry.delete).toHaveBeenCalledWith({
+        where: { id: 'entry-1' },
+      });
+      expect(result).toEqual(queueEntry);
+    });
+
+    it('deletes the entry when the caller is the host, even if they did not add it', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom); // hostId: user-1
+      prismaMock.roomMember.findUnique.mockResolvedValue({
+        ...activeMembership,
+        userId: 'user-1',
+        role: RoomRole.HOST,
+      });
+      prismaMock.roomQueueEntry.findUnique.mockResolvedValue(queueEntry); // addedById: user-2
+      prismaMock.roomQueueEntry.delete.mockResolvedValue(queueEntry);
+
+      await service.deleteEntry('user-1', 'room-1', 'entry-1');
+
+      expect(prismaMock.roomQueueEntry.delete).toHaveBeenCalledWith({
+        where: { id: 'entry-1' },
+      });
+    });
+
+    it('throws ForbiddenException when the caller neither added the entry nor hosts the room', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom); // hostId: user-1
+      prismaMock.roomMember.findUnique.mockResolvedValue({
+        ...activeMembership,
+        userId: 'user-3',
+      });
+      prismaMock.roomQueueEntry.findUnique.mockResolvedValue(queueEntry); // addedById: user-2
+
+      await expect(
+        service.deleteEntry('user-3', 'room-1', 'entry-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prismaMock.roomQueueEntry.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the entry does not exist', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(activeMembership);
+      prismaMock.roomQueueEntry.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.deleteEntry('user-2', 'room-1', 'entry-1'),
+      ).rejects.toThrow(NotFoundException);
+      expect(prismaMock.roomQueueEntry.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the entry belongs to a different room', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(activeMembership);
+      prismaMock.roomQueueEntry.findUnique.mockResolvedValue({
+        ...queueEntry,
+        roomId: 'some-other-room',
+      });
+
+      await expect(
+        service.deleteEntry('user-2', 'room-1', 'entry-1'),
+      ).rejects.toThrow(NotFoundException);
+      expect(prismaMock.roomQueueEntry.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when the caller is not an active member', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+      prismaMock.roomMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.deleteEntry('user-2', 'room-1', 'entry-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(prismaMock.roomQueueEntry.delete).not.toHaveBeenCalled();
     });
   });
 });

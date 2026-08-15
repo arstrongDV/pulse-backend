@@ -1,7 +1,8 @@
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class SkipPayloadDto {
   @IsString()
   @IsNotEmpty()
-  trackId!: string;
+  @IsOptional()
+  trackId?: string;
 }

@@ -142,27 +142,43 @@ export class PlaybackService {
     }
   }
 
-  async skip(hostId: string, roomId: string, trackId: string) {
+  async skip(hostId: string, roomId: string, trackId?: string) {
     await this.assertHost(hostId, roomId);
 
-    const positionMs = 0;
-    const scheduledAt = new Date(Date.now() + SCHEDULE_BUFFER_MS);
+    return this.prisma.$transaction(async (tx) => {
+      let resolvedTrackId = trackId;
 
-    return this.prisma.playbackState.upsert({
-      where: { roomId },
-      create: {
-        roomId,
-        trackId,
-        status: PlaybackStatus.PLAYING,
-        positionMs,
-        scheduledAt,
-      },
-      update: {
-        trackId,
-        status: PlaybackStatus.PLAYING,
-        positionMs,
-        scheduledAt,
-      },
+      if (!resolvedTrackId) {
+        const nextEntry = await tx.roomQueueEntry.findFirst({
+          where: { roomId },
+          orderBy: { createdAt: 'asc' },
+        });
+
+        if (!nextEntry) {
+          throw new BadRequestException('Queue is empty — nothing to skip to');
+        }
+
+        resolvedTrackId = nextEntry.trackId;
+        await tx.roomQueueEntry.delete({ where: { id: nextEntry.id } });
+      }
+
+      const scheduledAt = new Date(Date.now() + SCHEDULE_BUFFER_MS);
+      return tx.playbackState.upsert({
+        where: { roomId },
+        create: {
+          roomId,
+          trackId: resolvedTrackId,
+          status: PlaybackStatus.PLAYING,
+          positionMs: 0,
+          scheduledAt,
+        },
+        update: {
+          trackId: resolvedTrackId,
+          status: PlaybackStatus.PLAYING,
+          positionMs: 0,
+          scheduledAt,
+        },
+      });
     });
   }
 
