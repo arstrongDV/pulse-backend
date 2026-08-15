@@ -6,6 +6,7 @@ describe('RoomsController', () => {
   let controller: RoomsController;
   const roomsServiceMock = {
     createRoom: jest.fn(),
+    joinByCode: jest.fn(),
     addToQueue: jest.fn(),
     getRoomQueue: jest.fn(),
     deleteEntry: jest.fn(),
@@ -38,6 +39,24 @@ describe('RoomsController', () => {
       'user-1',
       'room-1',
       'track-1',
+    );
+  });
+
+  it('joinByCode delegates to RoomsService.joinByCode with the authenticated user id', async () => {
+    const membership = { id: 'member-1' };
+    roomsServiceMock.joinByCode.mockResolvedValue(membership);
+
+    const req = { user: { id: 'user-1' } } as never;
+    const result = await controller.joinByCode(req, {
+      code: 'ABC123',
+      password: 'secret',
+    });
+
+    expect(result).toEqual(membership);
+    expect(roomsServiceMock.joinByCode).toHaveBeenCalledWith(
+      'user-1',
+      'ABC123',
+      'secret',
     );
   });
 

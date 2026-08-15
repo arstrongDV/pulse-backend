@@ -312,6 +312,36 @@ describe('RoomsService', () => {
     });
   });
 
+  describe('joinByCode', () => {
+    it('resolves the code to a room and delegates to joinRoom', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom); // id: room-1
+      const joinRoomSpy = jest
+        .spyOn(service, 'joinRoom')
+        .mockResolvedValue({} as never);
+
+      await service.joinByCode('user-2', 'ABC123', 'room-secret');
+
+      expect(prismaMock.room.findUnique).toHaveBeenCalledWith({
+        where: { code: 'ABC123' },
+      });
+      expect(joinRoomSpy).toHaveBeenCalledWith(
+        'user-2',
+        'room-1',
+        'room-secret',
+      );
+    });
+
+    it('throws NotFoundException when no room matches the code', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(null);
+      const joinRoomSpy = jest.spyOn(service, 'joinRoom');
+
+      await expect(service.joinByCode('user-2', 'NOPE12')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(joinRoomSpy).not.toHaveBeenCalled();
+    });
+  });
+
   describe('leaveRoom', () => {
     it('sets leftAt on the membership', async () => {
       prismaMock.room.findUnique.mockResolvedValue(baseRoom); // hostId: 'user-1'

@@ -20,6 +20,7 @@ import type { AuthenticatedRequest } from '../user/user.controller';
 import { CreateMessagePayloadDto } from './dto/create-message.dto';
 import { GetMessagesQueryDto } from './dto/get-messages-query.dto';
 import { AddQueueEntryDto } from './dto/add-queue-entry.dto';
+import { JoinByCodePayloadDto } from './dto/join-by-code.dto';
 
 @ApiTags('rooms')
 @ApiBearerAuth()
@@ -39,6 +40,19 @@ export class RoomsController {
   @Get(':id')
   getRoomById(@Param('id', ParseUUIDPipe) id: string) {
     return this.roomsService.getRoomById(id);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('join')
+  joinByCode(
+    @Req() req: AuthenticatedRequest,
+    @Body() payload: JoinByCodePayloadDto,
+  ) {
+    return this.roomsService.joinByCode(
+      req.user.id,
+      payload.code,
+      payload.password,
+    );
   }
 
   @Post(':id/join')
