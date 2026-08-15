@@ -106,6 +106,17 @@ export class RoomsService {
     });
   }
 
+  async joinByCode(userId: string, code: string, password?: string) {
+    const room = await this.prismaService.room.findUnique({
+      where: { code },
+    });
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+
+    return this.joinRoom(userId, room.id, password);
+  }
+
   async leaveRoom(userId: string, roomId: string) {
     const room = await this.findRoomOrThrow(roomId);
 

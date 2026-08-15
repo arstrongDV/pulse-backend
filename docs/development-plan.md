@@ -465,6 +465,36 @@ Can a user brute-force login?
 Can a revoked token still access the API?
 ```
 
+## Review findings (2026-08-15)
+
+Checklist status, verified against the actual code:
+
+- **Authentication** — JWT access tokens + Argon2id-hashed, rotated refresh tokens.
+- **Authorization** — every controller guarded by `JwtAuthGuard`. Checked every DTO and controller/gateway handler in the codebase: the acting user is always derived from `req.user.id` / `client.data.userId` (both set from the verified JWT), never from a client-supplied field. No DTO anywhere accepts a `userId` field.
+- **Rate limiting** — global default (60/min) plus tighter per-route limits on login/register (5/min), messages, playback controls, queue actions, and `POST /rooms/join` (10/min — the room-code guessing surface specifically).
+- **CORS** — `app.enableCors()` left with no origin restriction, deliberately (see note below), not an oversight.
+- **Helmet** — added; CSP disabled to keep Swagger UI functional, all other headers active.
+- **Validation** — global `ValidationPipe({ whitelist, forbidNonWhitelisted, transform })`.
+- **Error handling** — `HttpExceptionFilter` only logs stack traces for unexpected (500) errors, never request bodies; client-facing error messages never include exception internals.
+- **Logging** — audited; only 5 log call sites in the whole codebase, none log secrets or full request payloads.
+- **Secrets** — `.env` gitignored, all reads go through `requireEnv()`. Auth responses are built by explicitly picking safe fields (`buildAuthResponse`), never spreading a full `User` row — fragile if that ever changes to a spread, but safe today.
+- **Database permissions** — local dev connects as the Postgres superuser (`postgres`). Fine for local dev; needs a scoped role (its own grants, no superuser) before any real deployment.
+- **Storage URLs** — presigned URLs are time-limited (5 min upload, 1 hour download) and scoped to a single object key; access is authorized server-side (ownership or queue membership) before a URL is ever generated.
+- **Arcjet** — evaluated, not added. The existing `@nestjs/throttler` guards (global default, plus per-route limits, plus the WS-specific `WsThrottlerGuard`) already cover every abuse case below. Arcjet would add an external paid dependency solving a problem the app doesn't currently have — revisit if real abuse patterns show up in production.
+
+Abuse-case analysis:
+
+- **Join arbitrary rooms?** No — private rooms require the correct password regardless of whether the room is reached by UUID or by code; public rooms are joinable by design.
+- **Member control playback?** No — `assertHost` enforced on every playback action.
+- **Impersonate another user?** No — confirmed no controller, gateway handler, or DTO accepts a client-supplied `userId`; the acting identity always comes from the verified JWT.
+- **Access another user's private track?** No — owner-only, or queued in a room the caller is an active member of.
+- **Spam a room?** No — messages, playback controls, and queue actions are all rate-limited.
+- **Brute-force room codes?** Mitigated — `POST /rooms/join` throttled at 10/min; the code space (~62^6) is also large enough that brute force isn't practical even unthrottled.
+- **Brute-force login?** No — login/register throttled at 5/min.
+- **Revoked token still works?** Partially, by design. Refresh tokens are checked against `revokedAt`/`expiresAt` on every use. Access tokens are stateless JWTs and are never re-checked against the database, so a token issued before a revocation stays valid for up to its remaining lifetime (15 min). This is the standard tradeoff of stateless JWT auth — accepted as-is. If a shorter revocation window is ever needed, the fix is a token-version check on the user record verified in the JWT strategy, which trades this off against a DB read on every authenticated request.
+
+**CORS — open by choice.** `app.enableCors()` has no origin restriction. Since Pulse's clients are mobile apps (unaffected by CORS entirely) and the only browser-facing surface is same-origin Swagger, this isn't gating anything today. Leave as-is until a real browser-facing client exists, then scope it to that origin specifically.
+
 ---
 
 # Phase 10 — Testing
