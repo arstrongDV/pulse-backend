@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,12 +10,35 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { InitUploadPayloadDto } from './dto/init-upload.dto';
 import { CompleteUploadPayloadDto } from './dto/complete-upload.dto';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
+
+export interface TrackData {
+  id: string;
+  ownerId: string;
+  title: string;
+  storageKey: string;
+  durationMs: number;
+  mimeType: string;
+  size: number;
+  createdAt: Date;
+}
+
+export interface TrackDownloadData extends TrackData {
+  url: string;
+}
+
+// Well under the presigned URL's own 1-hour validity — long enough to
+// actually avoid repeated authorization checks + R2 signing calls for a
+// client re-fetching the same track's URL.
+const TRACK_DOWNLOAD_CACHE_TTL_MS = 5 * 60 * 1_000;
 
 @Injectable()
 export class TracksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storageService: StorageService,
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
   ) {}
 
   async initUpload(userId: string, payload: InitUploadPayloadDto) {
@@ -61,6 +85,12 @@ export class TracksService {
   }
 
   async getDownloadUrl(userId: string, trackId: string) {
+    const cacheKey = this.trackKey(trackId, userId);
+    const cached = await this.cache.get<TrackDownloadData>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const track = await this.prisma.track.findUnique({
       where: { id: trackId },
     });
@@ -81,11 +111,18 @@ export class TracksService {
     }
 
     const url = await this.storageService.createDownloadUrl(track.storageKey);
-    return { ...track, url };
+    const result = { ...track, url };
+    await this.cache.set(cacheKey, result, TRACK_DOWNLOAD_CACHE_TTL_MS);
+
+    return result;
   }
 
   private getSafeExtension(filename: string): string {
     const match = /\.([a-zA-Z0-9]+)$/.exec(filename);
     return match ? match[1].toLowerCase() : 'bin';
+  }
+
+  private trackKey(trackId: string, userId: string) {
+    return `track:${trackId}:${userId}`;
   }
 }

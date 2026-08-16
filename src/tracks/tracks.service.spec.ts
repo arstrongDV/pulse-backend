@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { TracksService } from './tracks.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../storage/storage.service';
@@ -26,6 +27,11 @@ describe('TracksService', () => {
     createDownloadUrl: jest.fn(),
     headObject: jest.fn(),
   };
+  const cacheMock = {
+    get: jest.fn(),
+    set: jest.fn(),
+    del: jest.fn(),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -33,11 +39,13 @@ describe('TracksService', () => {
         TracksService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: StorageService, useValue: storageServiceMock },
+        { provide: CACHE_MANAGER, useValue: cacheMock },
       ],
     }).compile();
 
     service = module.get<TracksService>(TracksService);
     jest.clearAllMocks();
+    cacheMock.get.mockResolvedValue(undefined);
   });
 
   it('should be defined', () => {
@@ -205,6 +213,60 @@ describe('TracksService', () => {
           room: { members: { some: { userId: 'user-1', leftAt: null } } },
         },
       });
+    });
+
+    it('caches the result per user and serves a repeat call from cache without hitting Prisma', async () => {
+      prismaMock.track.findUnique.mockResolvedValue({
+        id: 'track-1',
+        ownerId: 'user-1',
+        storageKey: 'tracks/user-1/abc.mp3',
+      });
+      storageServiceMock.createDownloadUrl.mockResolvedValue(
+        'https://signed-get-url',
+      );
+
+      await service.getDownloadUrl('user-1', 'track-1');
+      expect(cacheMock.set).toHaveBeenCalledWith(
+        'track:track-1:user-1',
+        expect.objectContaining({ url: 'https://signed-get-url' }) as unknown,
+        5 * 60 * 1_000,
+      );
+
+      cacheMock.get.mockResolvedValue({
+        id: 'track-1',
+        ownerId: 'user-1',
+        url: 'https://signed-get-url',
+      });
+      await service.getDownloadUrl('user-1', 'track-1');
+
+      expect(prismaMock.track.findUnique).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not serve one user a track cached under another user — cache is keyed per user, not just per track', async () => {
+      // user-2 owns the track and successfully fetches (and caches) it first.
+      prismaMock.track.findUnique.mockResolvedValue({
+        id: 'track-1',
+        ownerId: 'user-2',
+        storageKey: 'tracks/user-2/abc.mp3',
+      });
+      storageServiceMock.createDownloadUrl.mockResolvedValue(
+        'https://signed-get-url',
+      );
+      await service.getDownloadUrl('user-2', 'track-1');
+      const ownerCacheKey = (cacheMock.set.mock.calls[0] as unknown[])[0];
+      expect(ownerCacheKey).toBe('track:track-1:user-2');
+
+      // user-1, unrelated to the track, then requests the same trackId.
+      // The cache lookup must miss (different key) so authorization still
+      // runs — it must NOT transparently return user-2's cached response.
+      cacheMock.get.mockImplementation((key: string) =>
+        Promise.resolve(key === ownerCacheKey ? { url: 'leaked' } : undefined),
+      );
+      prismaMock.roomQueueEntry.findFirst.mockResolvedValue(null);
+
+      await expect(service.getDownloadUrl('user-1', 'track-1')).rejects.toThrow(
+        ForbiddenException,
+      );
     });
   });
 });
