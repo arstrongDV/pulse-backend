@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Prisma, RoomRole, RoomVisibility } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { RoomsService } from './rooms.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -58,6 +59,11 @@ describe('RoomsService', () => {
   const eventEmitterMock = {
     emit: jest.fn(),
   };
+  const cacheMock = {
+    get: jest.fn(),
+    set: jest.fn(),
+    del: jest.fn(),
+  };
 
   const baseRoom = {
     id: 'room-1',
@@ -77,6 +83,7 @@ describe('RoomsService', () => {
         RoomsService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: EventEmitter2, useValue: eventEmitterMock },
+        { provide: CACHE_MANAGER, useValue: cacheMock },
       ],
     }).compile();
 
@@ -89,6 +96,7 @@ describe('RoomsService', () => {
     );
     prismaMock.roomMember.count.mockResolvedValue(1);
     prismaMock.roomMember.findUnique.mockResolvedValue(null);
+    cacheMock.get.mockResolvedValue(undefined);
   });
 
   it('should be defined', () => {
@@ -195,6 +203,23 @@ describe('RoomsService', () => {
       expect(prismaMock.room.findUnique).toHaveBeenCalledWith({
         where: { id: 'non-existent-id' },
       });
+    });
+
+    it('caches the result and serves the next call from cache without hitting Prisma', async () => {
+      prismaMock.room.findUnique.mockResolvedValue(baseRoom);
+
+      await service.getRoomById('room-1');
+      expect(cacheMock.set).toHaveBeenCalledWith(
+        'room:room-1',
+        expect.objectContaining({ id: 'room-1' }) as unknown,
+        3_000,
+      );
+
+      cacheMock.get.mockResolvedValue({ id: 'room-1', hostId: 'user-1' });
+      const result = await service.getRoomById('room-1');
+
+      expect(result).toEqual({ id: 'room-1', hostId: 'user-1' });
+      expect(prismaMock.room.findUnique).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -438,6 +463,9 @@ describe('RoomsService', () => {
         where: { roomId_userId: { roomId: 'room-1', userId: 'user-1' } },
         data: { leftAt: expect.any(Date) as Date },
       });
+      // hostId changed — a stale cache would let the departed host keep
+      // passing assertHost's check.
+      expect(cacheMock.del).toHaveBeenCalledWith('room:room-1');
     });
 
     it('deletes the room when the host leaves and no other active member remains', async () => {
@@ -479,6 +507,7 @@ describe('RoomsService', () => {
       expect(txMock.room.delete).toHaveBeenCalledWith({
         where: { id: 'room-1' },
       });
+      expect(cacheMock.del).toHaveBeenCalledWith('room:room-1');
       expect(result).not.toHaveProperty('passwordHash');
       expect(result.id).toBe('room-1');
     });
