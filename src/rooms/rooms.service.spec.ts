@@ -464,8 +464,10 @@ describe('RoomsService', () => {
         data: { leftAt: expect.any(Date) as Date },
       });
       // hostId changed — a stale cache would let the departed host keep
-      // passing assertHost's check.
+      // passing assertHost's check. Both the id- and code-keyed entries
+      // need invalidating — they're independent cache entries.
       expect(cacheMock.del).toHaveBeenCalledWith('room:room-1');
+      expect(cacheMock.del).toHaveBeenCalledWith(`room:code:${baseRoom.code}`);
     });
 
     it('deletes the room when the host leaves and no other active member remains', async () => {
@@ -508,6 +510,7 @@ describe('RoomsService', () => {
         where: { id: 'room-1' },
       });
       expect(cacheMock.del).toHaveBeenCalledWith('room:room-1');
+      expect(cacheMock.del).toHaveBeenCalledWith(`room:code:${baseRoom.code}`);
       expect(result).not.toHaveProperty('passwordHash');
       expect(result.id).toBe('room-1');
     });

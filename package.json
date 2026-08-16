@@ -22,7 +22,8 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "pretest:e2e": "docker compose up -d --wait postgres redis && DOTENV_CONFIG_PATH=.env.test.local npx prisma migrate deploy",
+    "test:e2e": "DOTENV_CONFIG_PATH=.env.test.local jest --config ./test/jest-e2e.json",
     "seed": "prisma db seed"
   },
   "dependencies": {
@@ -67,7 +68,7 @@
     "@types/node": "^24.0.0",
     "@types/passport-jwt": "^4.0.1",
     "@types/pg": "^8.21.0",
-    "@types/supertest": "^7.0.0",
+    "@types/supertest": "^7.2.1",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
@@ -76,7 +77,7 @@
     "prettier": "^3.4.2",
     "socket.io-client": "^4.8.3",
     "source-map-support": "^0.5.21",
-    "supertest": "^7.0.0",
+    "supertest": "^7.2.2",
     "ts-jest": "^29.2.5",
     "ts-loader": "^9.5.2",
     "ts-node": "^10.9.2",

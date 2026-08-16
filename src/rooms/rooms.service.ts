@@ -90,6 +90,25 @@ export class RoomsService {
     return safeRoom;
   }
 
+  async getRoomByCode(code: string) {
+    const cacheKey = this.roomCodeCacheKey(code);
+    const cached =
+      await this.cache.get<ReturnType<typeof this.toSafeRoom>>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const room = await this.prismaService.room.findUnique({
+      where: { code },
+    });
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+    const safeRoom = this.toSafeRoom(room);
+    await this.cache.set(cacheKey, safeRoom, ROOM_CACHE_TTL_MS);
+    return safeRoom;
+  }
+
   async joinRoom(userId: string, roomId: string, password?: string) {
     const room = await this.findRoomOrThrow(roomId);
 
@@ -181,6 +200,7 @@ export class RoomsService {
     // hostId just changed — a stale cached entry would let the departed
     // host keep passing assertHost's check until the TTL expires.
     await this.cache.del(this.roomCacheKey(roomId));
+    await this.cache.del(this.roomCodeCacheKey(room.code));
     return result;
   }
 
@@ -200,6 +220,7 @@ export class RoomsService {
     });
 
     await this.cache.del(this.roomCacheKey(roomId));
+    await this.cache.del(this.roomCodeCacheKey(room.code));
     return this.toSafeRoom(deletedRoom);
   }
 
@@ -309,6 +330,14 @@ export class RoomsService {
 
   private roomCacheKey(roomId: string) {
     return `room:${roomId}`;
+  }
+
+  // Deliberately a separate namespace from roomCacheKey — leaveRoom's
+  // host-handoff and deleteRoom only invalidate the id-keyed entry, so a
+  // code-keyed entry sharing that key would go stale silently, invisible
+  // to that invalidation.
+  private roomCodeCacheKey(code: string) {
+    return `room:code:${code}`;
   }
 
   private async checkMembership(userId: string, roomId: string) {
