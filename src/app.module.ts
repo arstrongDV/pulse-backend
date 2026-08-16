@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { CacheModule } from '@nestjs/cache-manager';
+import { createKeyv } from '@keyv/redis';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
@@ -13,10 +15,17 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { PlaybackModule } from './playback/playback.module';
 import { StorageModule } from './storage/storage.module';
 import { TracksModule } from './tracks/tracks.module';
+import { requireEnv } from './common/config/env';
 
 @Module({
   imports: [
     PrismaModule,
+    CacheModule.registerAsync({
+      isGlobal: true,
+      useFactory: () => ({
+        stores: [createKeyv(requireEnv('REDIS_URL'))],
+      }),
+    }),
     UserModule,
     AuthModule,
     RoomsModule,

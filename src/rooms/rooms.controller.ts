@@ -42,6 +42,11 @@ export class RoomsController {
     return this.roomsService.getRoomById(id);
   }
 
+  @Get('/by-code/:code')
+  getRoomByCode(@Param('code') code: string) {
+    return this.roomsService.getRoomByCode(code);
+  }
+
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('join')
   joinByCode(

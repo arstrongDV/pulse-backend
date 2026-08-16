@@ -1,9 +1,12 @@
 import {
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { Prisma, Room, RoomRole } from '@prisma/client';
 import * as argon2 from 'argon2';
 import { PrismaService } from '../prisma/prisma.service';
@@ -13,12 +16,19 @@ import { CreateMessagePayloadDto } from './dto/create-message.dto';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 const MAX_CODE_ATTEMPTS = 5;
+// Short TTL is a deliberate safety net, not just a performance knob: this
+// cache backs assertHost's hostId check on every playback action. Anything
+// longer risks a departed host retaining playback control for the TTL
+// window after a handoff — kept short enough that even without the
+// explicit invalidation below, the exposure is bounded.
+const ROOM_CACHE_TTL_MS = 3_000;
 
 @Injectable()
 export class RoomsService {
   constructor(
     private readonly prismaService: PrismaService,
     private readonly eventEmitter: EventEmitter2,
+    @Inject(CACHE_MANAGER) private readonly cache: Cache,
   ) {}
 
   async createRoom(hostId: string, payload: CreateRoomPayloadDto) {
@@ -68,8 +78,35 @@ export class RoomsService {
   }
 
   async getRoomById(id: string) {
-    const room = await this.findRoomOrThrow(id);
-    return this.toSafeRoom(room);
+    const cacheKey = this.roomCacheKey(id);
+    const cached =
+      await this.cache.get<ReturnType<typeof this.toSafeRoom>>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const safeRoom = this.toSafeRoom(await this.findRoomOrThrow(id));
+    await this.cache.set(cacheKey, safeRoom, ROOM_CACHE_TTL_MS);
+    return safeRoom;
+  }
+
+  async getRoomByCode(code: string) {
+    const cacheKey = this.roomCodeCacheKey(code);
+    const cached =
+      await this.cache.get<ReturnType<typeof this.toSafeRoom>>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    const room = await this.prismaService.room.findUnique({
+      where: { code },
+    });
+    if (!room) {
+      throw new NotFoundException('Room not found');
+    }
+    const safeRoom = this.toSafeRoom(room);
+    await this.cache.set(cacheKey, safeRoom, ROOM_CACHE_TTL_MS);
+    return safeRoom;
   }
 
   async joinRoom(userId: string, roomId: string, password?: string) {
@@ -143,7 +180,7 @@ export class RoomsService {
       return this.deleteRoom(userId, roomId);
     }
 
-    return this.prismaService.$transaction(async (tx) => {
+    const result = await this.prismaService.$transaction(async (tx) => {
       await tx.room.update({
         where: { id: roomId },
         data: { hostId: nextHost.userId },
@@ -159,6 +196,12 @@ export class RoomsService {
         data: { leftAt: new Date() },
       });
     });
+
+    // hostId just changed — a stale cached entry would let the departed
+    // host keep passing assertHost's check until the TTL expires.
+    await this.cache.del(this.roomCacheKey(roomId));
+    await this.cache.del(this.roomCodeCacheKey(room.code));
+    return result;
   }
 
   async deleteRoom(userId: string, roomId: string) {
@@ -176,6 +219,8 @@ export class RoomsService {
       return tx.room.delete({ where: { id: roomId } });
     });
 
+    await this.cache.del(this.roomCacheKey(roomId));
+    await this.cache.del(this.roomCodeCacheKey(room.code));
     return this.toSafeRoom(deletedRoom);
   }
 
@@ -281,6 +326,18 @@ export class RoomsService {
     return this.prismaService.roomQueueEntry.delete({
       where: { id: entryId },
     });
+  }
+
+  private roomCacheKey(roomId: string) {
+    return `room:${roomId}`;
+  }
+
+  // Deliberately a separate namespace from roomCacheKey — leaveRoom's
+  // host-handoff and deleteRoom only invalidate the id-keyed entry, so a
+  // code-keyed entry sharing that key would go stale silently, invisible
+  // to that invalidation.
+  private roomCodeCacheKey(code: string) {
+    return `room:code:${code}`;
   }
 
   private async checkMembership(userId: string, roomId: string) {
